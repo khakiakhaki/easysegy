@@ -1,0 +1,9 @@
+demo.c
+demo
+demo_write
+demo_read
+*.a
+*.ipynb
+*.bin
+*.segy
+*.tar.gz
