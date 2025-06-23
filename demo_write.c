@@ -1,8 +1,8 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "segy.h"
-#include <math.h>
 
 #define VERBOSE 1  // printinfo
 
@@ -10,69 +10,78 @@ int main() {
   int nt = 200, ntrace = 100;
   float dt = 0.002, dx = 10.;
   float* data = (float*)malloc(sizeof(float) * nt);
+  int* thead = (int*)malloc(sizeof(int) * SEGY_THNKEYS);
 
-  char *filename = "output.segy";
+  char* filename = "output.segy";
   FILE* fout = fopen(filename, "wb");
+  segyfile segyout = segyfile_init_write(fout, nt, dt, 1, ntrace);
 
-  char bhead[SEGY_BNYBYTES];
-  // length of a trace 240+nt*4
-  size_t nsegy = SEGY_HDRBYTES + (nt * 4);
+  int needtexthead = 1;  // if want write text header, set to 1, else set to 0
 
-  char* trace = (char*)malloc(nsegy);
-  int* thead= (int*)malloc(sizeof(int) * SEGY_NKEYS);
-  // init with no value
-  memset(bhead, 0, SEGY_BNYBYTES);
-  memset(trace, 0, nsegy);
-  memset(thead, 0, SEGY_NKEYS * sizeof(int));
-  // set binaryheader 400bytes
-  set_segyformat(bhead, 1);
-  set_segyns(bhead, nt);
-  set_segydt(bhead, dt);
-  // always to ibm
-  set_segyformat(bhead, 1);
+  if (needtexthead) {
+    // first kind of write text header 3200 bytes
+    // set text header, padding 3200 bytes
+    snprintf(segyout->textraw, SEGY_EBCBYTES, "%3199s",
+             "SEGY file created by easy_segy demo write\n");
+    // write text header, 3200 bytes
+    segywrite_texthead(segyout, 0, 0);
+  } else {
+    // this would write nothing to text header
+    segywrite_texthead(segyout, 1, 0);
+  }
+
+  // if want set other binary with header key
+  segyout->bhead[segybhkey("jobid")] = 10;  // set dt
+  // if want set other binary header key with byte offset , star from 0
+  int value = 100;
+  value2char(segyout->bhraw, &value, 302, "s");  // set 302
+  // write binary header to file
+  segywrite_binaryhead(segyout);
+
   int tracecount = 0;
 
-  // write text header and binary header
-  writesegyheader(fout, "testest", 0, 0);
-  if (SEGY_BNYBYTES != fwrite(bhead, 1, SEGY_BNYBYTES, fout))
-    errorinfo("Error writing binary header");
+  // this for coordinate scaling 10,100,1000 means x10,x100,x1000
+  // -10,-100,-1000 means x0.1 x0.001 x0.0001
 
-  // this for coor dinate scalign
   int scalco = 10;
-  float calscalco = scalco > 0 ? scalco : 1.0 / (-1 * scalco);
+  float calscalco = 1.0;  // coordinate scaling factor
+  if (scalco == 0) {
+    calscalco = 1.;
+  } else if (scalco < 0) {
+    calscalco = -1. / scalco;  // convert to positive
+  }
 
   for (int itrace = 0; itrace < ntrace; itrace++) {
+    // data generation
     for (int i = 0; i < nt; i++) {
-        /* 基础线性项：随采样点序号递增 | Base linear term: Increases with sample index */
-    float linear = (float)i / nt; 
-    
-    /* 正弦波项：频率与道号关联 | Sinusoidal term: Frequency linked to trace number */
-    float sine = sinf(2.0f * M_PI * linear * (itrace + 1)); 
-    
-    /* 组合信号：振幅随道号变化 | Combined signal: Amplitude scales with trace number */
-    data[i] = 0.5f * (itrace + 1) * (linear + sine); 
+      /* 基础线性项：随采样点序号递增 | Base linear term: Increases with sample index */
+      /* 正弦波项：频率与道号关联 | Sinusoidal term: Frequency linked to trace number */
+      /* 组合信号：振幅随道号变化 | Combined signal: Amplitude scales with trace number */
+      float linear = (float)i / nt;
+      float sine = sinf(2.0f * M_PI * linear * (itrace + 1));
+      data[i] = 0.5f * (itrace + 1) * (linear + sine);
     }
 
-    // // set trace header 240 bytes
-    thead[segykey("tracl")] = itrace + 1;                 //设置道号
-    thead[segykey("tracr")] = tracecount;            //设置文件中道序号
-    thead[segykey("fldr")] = itrace + 1;                  //设置炮点号
-    thead[segykey("ep")] = itrace + 1;                    //设置炮点号
-    thead[segykey("scalco")] = scalco;               //设置坐标因子
-    thead[segykey("sx")] = itrace * dx * calscalco;  // sx location
+    // for every trace, set its header
+    thead[segykey("tracl")] = itrace + 1;  //设置道号
+    thead[segykey("tracr")] = tracecount;  //设置文件中道序号
+    thead[segykey("fldr")] = itrace + 1;   //设置炮点号
+    thead[segykey("ep")] = itrace + 1;     //设置炮点号
+    thead[segykey("scalco")] = scalco == 1 ? 1 : -1 * scalco;  //设置坐标因子
+    thead[segykey("sx")] = itrace * dx * calscalco;            // sx location
     thead[segykey("dt")] = dt < 1 ? 1000000 * dt : 1000 * dt;  // sx location
     thead[segykey("gx")] = itrace * dx * calscalco;    //reciever locaiton
     thead[segykey("cdpx")] = itrace * dx * calscalco;  //reciever locaiton
     thead[segykey("offset")] = 0 * dx * calscalco;     //offset
 
     // // header and data to segy
-    head2segy(trace, thead, SEGY_NKEYS);
-    trace2segy(trace + SEGY_HDRBYTES, data, nt, 1);
-    if (nsegy != fwrite(trace, 1, nsegy, fout))
-      errorinfo("Error writing trace %d", tracecount + 1);
+    segywrite_onetrace(segyout, thead, data);
   }
 
-  free(trace);
+  warninginfo("write %d traces to %s", ntrace, filename);
+  free(data);
   free(thead);
+  segyfile_free(segyout);
+  fclose(fout);
   return 0;
 }

@@ -113,7 +113,6 @@ static byte ASCtoEBC[256] = {
 typedef struct Segy {
   const char* name;
   unsigned int size;
-  unsigned int offset;
 } segy;
 
 static const segy bheadkey[] = {
@@ -367,6 +366,9 @@ static void swapb(byte* x, byte* y);
 static float ibm2float(const char* num);
 static void float2ibm(float y, char* num);
 
+/* alloc segyfiel */
+static void segyinit_alloc(segyfile segyf);
+
 /* init a segey for read
 * @return SEGY_FILE 
 with binary header and text header already read
@@ -374,14 +376,8 @@ could direct read data
 */
 segyfile segyfile_init_read(FILE* fp) {
   segyfile segyf = (segyfile)malloc(sizeof(SEGY_FILE));
-  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
+  segyinit_alloc(segyf);
   segyf->fp = fp;
-  segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
-  if (!segyf->textraw) errorinfo("malloc failed for textraw");
-  segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
-  if (!segyf->bhraw) errorinfo("malloc failed for bhraw");
-  segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
-  if (!segyf->bhead) errorinfo("malloc failed for bhead");
 
   segyread_texthead(segyf, 0, 0);
   segyread_binaryhead(segyf);
@@ -396,23 +392,13 @@ segyfile segyfile_init_read(FILE* fp) {
   return segyf;
 }
 
-/*< segyfile write init , no write set */
+/* segyfile write init , no write set, should write manual for more flexible write */
 segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,
                               size_t ntrace) {
   segyfile segyf = (segyfile)malloc(sizeof(SEGY_FILE));
-  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
-
+  segyinit_alloc(segyf);
   segyf->fp = fp;
-  segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
-  if (!segyf->textraw) errorinfo("malloc failed for textraw");
-  segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
-  if (!segyf->bhraw) errorinfo("malloc failed for bhraw");
-  segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
-  if (!segyf->bhead) errorinfo("malloc failed for bhead");
 
-
-  memset(segyf->bhraw, 0, SEGY_BHNBYTES);
-  memset(segyf->textraw, 0, SEGY_EBCBYTES);
   segyf->format = format;
   segyf->ns = ns;
   segyf->dt = dt;
@@ -425,6 +411,19 @@ segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,
   if (!segyf->tracebuf) errorinfo("malloc failed for tracebuf");
   memset(segyf->tracebuf, 0, segyf->nsegy);
   return segyf;
+}
+
+static void segyinit_alloc(segyfile segyf) {
+  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
+  segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
+  if (!segyf->textraw) errorinfo("malloc failed for segy textraw");
+  memset(segyf->textraw, 0, SEGY_EBCBYTES);
+  segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
+  if (!segyf->bhraw) errorinfo("malloc failed for segy bhraw");
+  memset(segyf->bhraw, 0, SEGY_BHNBYTES);
+  segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
+  if (!segyf->bhead) errorinfo("malloc failed for segy bhead");
+  memset(segyf->bhead, 0, sizeof(int) * SEGY_BHNKEYS);
 }
 
 /*< free the segyfile */
@@ -503,7 +502,7 @@ static long convert8(const char* buf)
     long s;
   } x;
 
-  memcpy(x.b, buf, 4);
+  memcpy(x.b, buf, 8);
 
   if (little_endian) {
     swapb(x.b, x.b + 7);
@@ -541,7 +540,7 @@ static double fconvert8(const char* buf)
     double s;
   } x;
 
-  memcpy(x.b, buf, 4);
+  memcpy(x.b, buf, 8);
 
   if (little_endian) {
     swapb(x.b, x.b + 7);
@@ -1021,7 +1020,7 @@ int segywrite_texthead(segyfile segyf, int isskip, int useebc) {
     return 3200;
   }
   char ahead[SEGY_EBCBYTES];
-  strncpy(ahead, segyf->textraw, SEGY_EBCBYTES);
+  memcpy(ahead, segyf->textraw, SEGY_EBCBYTES);
 
   if (useebc) {
     asc2ebc(SEGY_EBCBYTES, ahead);
