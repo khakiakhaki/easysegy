@@ -372,45 +372,70 @@ static void float2ibm(float y, char* num);
 with binary header and text header already read
 could direct read data 
 */
-SEGY_FILE segyfile_init_read(const FILE* fp) {
-  SEGY_FILE segyf;
-  segyf.fp = fp;
+segyfile segyfile_init_read(FILE* fp) {
+  segyfile segyf = (segyfile)malloc(sizeof(SEGY_FILE));
+  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
+  segyf->fp = fp;
+  segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
+  if (!segyf->textraw) errorinfo("malloc failed for textraw");
+  segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
+  if (!segyf->bhraw) errorinfo("malloc failed for bhraw");
+  segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
+  if (!segyf->bhead) errorinfo("malloc failed for bhead");
+
   segyread_texthead(segyf, 0, 0);
   segyread_binaryhead(segyf);
-  segyf.format = segyformat(segyf.bhraw);
-  segyf.ns = segyns(segyf.bhraw);
-  segyf.dt = segydt(segyf.bhraw) / 1000000.;  // Convert to seconds
-  segyf.format = segyformat(segyf.bhraw);
-  segyf.nsegy = segycal_nsegy(segyf);
-  segyf.ntrace = segycal_ntrace(segyf);
-  segyf.tracebuf = (char*)malloc(segyf.nsegy);
-  memset(segyf.tracebuf, 0, segyf.nsegy);
+  segyf->format = segyformat(segyf->bhraw);
+  segyf->ns = segyns(segyf->bhraw);
+  segyf->dt = segydt(segyf->bhraw);
+  segyf->nsegy = segycal_nsegy(segyf);
+  segyf->ntrace = segycal_ntrace(segyf);
+  segyf->tracebuf = (char*)malloc(segyf->nsegy);
+  if (!segyf->tracebuf) errorinfo("malloc failed for tracebuf");
+  memset(segyf->tracebuf, 0, segyf->nsegy);
   return segyf;
 }
 
 /*< segyfile write init , no write set */
-SEGY_FILE segyfile_init_write(const FILE* fp, int ns, float dt, int format,
+segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,
                               size_t ntrace) {
-  SEGY_FILE segyf;
-  segyf.fp = fp;
-  memset(segyf.bhraw, 0, SEGY_BHNBYTES);
-  memset(segyf.textraw, 0, SEGY_EBCBYTES);
-  segyf.format = format;
-  segyf.ns = ns;
-  segyf.dt = dt;
-  segyf.bhead[segybhkey("hns")] = ns;
-  segyf.bhead[segybhkey("hdt")] = (int)(dt > 1 ? dt * 1000. : dt * 1000000.);
-  segyf.bhead[segybhkey("format")] = format;
-  segyf.ntrace = ntrace;
-  segyf.nsegy = segycal_nsegy(segyf);
-  segyf.tracebuf = (char*)malloc(segyf.nsegy);
-  memset(segyf.tracebuf, 0, segyf.nsegy);
+  segyfile segyf = (segyfile)malloc(sizeof(SEGY_FILE));
+  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
+
+  segyf->fp = fp;
+  segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
+  if (!segyf->textraw) errorinfo("malloc failed for textraw");
+  segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
+  if (!segyf->bhraw) errorinfo("malloc failed for bhraw");
+  segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
+  if (!segyf->bhead) errorinfo("malloc failed for bhead");
+
+
+  memset(segyf->bhraw, 0, SEGY_BHNBYTES);
+  memset(segyf->textraw, 0, SEGY_EBCBYTES);
+  segyf->format = format;
+  segyf->ns = ns;
+  segyf->dt = dt;
+  segyf->bhead[segybhkey("hns")] = ns;
+  segyf->bhead[segybhkey("hdt")] = (int)(dt > 1 ? dt * 1000. : dt * 1000000.);
+  segyf->bhead[segybhkey("format")] = format;
+  segyf->ntrace = ntrace;
+  segyf->nsegy = segycal_nsegy(segyf);
+  segyf->tracebuf = (char*)malloc(segyf->nsegy);
+  if (!segyf->tracebuf) errorinfo("malloc failed for tracebuf");
+  memset(segyf->tracebuf, 0, segyf->nsegy);
   return segyf;
 }
 
 /*< free the segyfile */
-void segyfile_free(SEGY_FILE segyf) {
-  free(segyf.tracebuf);
+void segyfile_free(segyfile segyf) {
+  if (segyf) {
+    free(segyf->tracebuf);
+    free(segyf->textraw);
+    free(segyf->bhraw);
+    free(segyf->bhead);
+    free(segyf);
+  }
 }
 
 /*< Set endianness, if true means machine is little endian >*/
@@ -872,7 +897,7 @@ void trace2segy(char* buf, const float* trace, int ns, int format) {
 }
 
 /*< Convert an integer trace[nk] to buffer buf */
-void head2segy(const char* theadchar, const int* trace, int nk) {
+void head2segy(char* theadchar, const int* trace, int nk) {
   char* buf = theadchar;
   if (nk > SEGY_THNKEYS)
     nk = SEGY_THNKEYS;
@@ -891,7 +916,7 @@ void head2segy(const char* theadchar, const int* trace, int nk) {
 * @param theadchar: raw segy buffer, must be at least SEGY_THNBYTES bytes
 * @param thead: integer array to store trace header, must be at least SEGY
 */
-void segy2head(const char* theadchar, int* thead, int nk) {
+void segy2head(char* theadchar, int* thead, int nk) {
   char* p = theadchar;
   if (nk > SEGY_THNKEYS)
     nk = SEGY_THNKEYS;
@@ -907,7 +932,7 @@ void segy2head(const char* theadchar, int* thead, int nk) {
 }
 
 /* write the first nk keys to binary header */
-void bhead2segy(const char* bheadchar,const int* bhead, int nk) {
+void bhead2segy(char* bheadchar, const int* bhead, int nk) {
   char* buf = bheadchar;
   if (nk > SEGY_BHNKEYS)
     nk = SEGY_BHNKEYS;
@@ -926,12 +951,12 @@ void bhead2segy(const char* bheadchar,const int* bhead, int nk) {
 * @param bheadchar: raw segy buffer, must be at least SEGY_THNBYTES bytes
 * @param bhead: integer array to store trace header, must be at least SEGY
 */
-void segy2bhead(const char* bheadchar,int* bhead, int nk) {
+void segy2bhead(char* bheadchar,int* bhead, int nk) {
   char* buf = bheadchar;
   if (nk > SEGY_BHNKEYS)
     nk = SEGY_BHNKEYS;
   for (int i = 0; i < SEGY_BHNKEYS; i++) {
-    if (i < SEGY_THNKEYS && 2 == bheadkey[i].size) {
+    if (i < SEGY_BHNKEYS && 2 == bheadkey[i].size) {
       bhead[i] = convert2(buf);
       buf += 2;
     } else {
@@ -961,6 +986,27 @@ void errorinfo(const char* format, ...) {
   exit(EXIT_FAILURE);
 }
 
+
+/*< print warning info and exit program */
+void warninginfo(const char* format, ...) {
+  va_list args;
+
+  (void)fflush(stdout);
+  va_start(args, format);
+
+  /* print out name of program causing error */
+  fprintf(stderr, "%s: ", "WARNING");
+
+  /* print out remainder of message */
+  (void)vfprintf(stderr, format, args);
+  va_end(args);
+
+  /* if format ends with ':', print system information */
+  fprintf(stderr, "\n");
+  (void)fflush(stderr);
+}
+
+
 /*
 wirte the segy text header to file , all 3200 bytes
 @pram file: file to write header to
@@ -969,18 +1015,19 @@ wirte the segy text header to file , all 3200 bytes
 @param isebccode: if true, write with EBCDIC code 
 */
 
-int segywrite_texthead(SEGY_FILE segyf, int isskip, int useebc) {
+int segywrite_texthead(segyfile segyf, int isskip, int useebc) {
   if (isskip) {
-    fseek(segyf.fp, SEGY_EBCBYTES, SEEK_SET);
+    fseek(segyf->fp, SEGY_EBCBYTES, SEEK_SET);
     return 3200;
   }
   char ahead[SEGY_EBCBYTES];
-  strncpy(ahead, segyf.textraw, SEGY_EBCBYTES);
+  strncpy(ahead, segyf->textraw, SEGY_EBCBYTES);
+
   if (useebc) {
     asc2ebc(SEGY_EBCBYTES, ahead);
   }
 
-  return fwrite(ahead, SEGY_EBCBYTES, 1, segyf.fp);
+  return fwrite(ahead, 1, SEGY_EBCBYTES, segyf->fp);
 }
 
 /*
@@ -990,23 +1037,20 @@ wirte the segy text header to file , all 3200 bytes
 @param isskip: if true, skips writing header,write nothing
 @param isebccode: if true, decode from EBCDIC to ASCII 
 */
-int segyread_texthead(SEGY_FILE segyf, int isskip, int useebc) {
+int segyread_texthead(segyfile segyf, int isskip, int useebc) {
   if (isskip) {
-    fseek(segyf.fp, SEGY_EBCBYTES, SEEK_SET);
+    fseek(segyf->fp, SEGY_EBCBYTES, SEEK_SET);
     return 3200;
   }
 
-  char ahead[SEGY_EBCBYTES];
-  memset(ahead, 0, SEGY_EBCBYTES);
 
-  if (SEGY_EBCBYTES != fread(ahead, 1, SEGY_EBCBYTES, segyf.fp))
+  if (SEGY_EBCBYTES != fread(segyf->textraw, 1, SEGY_EBCBYTES, segyf->fp))
     errorinfo("Error reading ebcdic header");
 
   if (useebc) {
-    ebc2asc(SEGY_EBCBYTES, ahead);
+    ebc2asc(SEGY_EBCBYTES, segyf->textraw);
   }
 
-  strncpy(segyf.textraw, ahead, SEGY_EBCBYTES);
   return SEGY_EBCBYTES;
 }
 
@@ -1014,31 +1058,37 @@ int segyread_texthead(SEGY_FILE segyf, int isskip, int useebc) {
 @param fp: file to write header to
 @param bhead : binary header to write,  int *
 */
-int segywrite_binaryhead(SEGY_FILE segyf) {
-  bhead2segy(segyf.bhraw,segyf.bhead, SEGY_BHNKEYS);
-  return fwrite(segyf.bhraw, 1, SEGY_BHNBYTES, segyf.fp);
+int segywrite_binaryhead(segyfile segyf) {
+  bhead2segy(segyf->bhraw, segyf->bhead, SEGY_BHNKEYS);
+  if (segydt(segyf->bhraw) == 0. || segyf->bhead[segybhkey("hdt")] == 0)
+  warninginfo("binary header dt not set");  
+  if (segyns(segyf->bhraw) == 0 || segyf->bhead[segybhkey("hns")] == 0)
+    warninginfo("binary header ns not set");
+  if (segyformat(segyf->bhraw) == 0 || segyf->bhead[segybhkey("format")] == 0)
+    warninginfo("binary header format not set");
+  return fwrite(segyf->bhraw, 1, SEGY_BHNBYTES, segyf->fp);
 }
 
-int segyread_binaryhead(SEGY_FILE segyf) {
-  if (SEGY_BHNBYTES != fread(segyf.bhraw, 1, SEGY_BHNBYTES, segyf.fp))
+int segyread_binaryhead(segyfile segyf) {
+  if (SEGY_BHNBYTES != fread(segyf->bhraw, 1, SEGY_BHNBYTES, segyf->fp))
     errorinfo("Error reading binary header");
-  segy2bhead(segyf.bhraw,segyf.bhead,SEGY_BHNKEYS);
+  segy2bhead(segyf->bhraw, segyf->bhead, SEGY_BHNKEYS);
   return SEGY_BHNBYTES;
 }
 
 /*< the bytes of one trace with header
 240 + ns * sizeof(databyte)*/
-size_t segycal_nsegy(SEGY_FILE segyf) {
-  return (size_t)(SEGY_THNBYTES + segyf.ns * ((segyf.format == 3) ? 2 : 4));
+size_t segycal_nsegy(segyfile segyf) {
+  return (size_t)(SEGY_THNBYTES + segyf->ns * ((segyf->format == 3) ? 2 : 4));
 }
 
 /*< calculate trace number */
-size_t segycal_ntrance(SEGY_FILE segyf) {
-  size_t original_pos = ftello(segyf.fp);
-  fseeko(segyf.fp, 0, SEEK_END);
-  size_t pos = ftello(segyf.fp); /* pos is the filesize in bytes */
-  fseeko(segyf.fp, original_pos, SEEK_SET);
-  return (pos - SEGY_EBCBYTES - SEGY_BHNBYTES) / segyf.nsegy;
+size_t segycal_ntrace(segyfile segyf) {
+  size_t original_pos = ftello(segyf->fp);
+  fseeko(segyf->fp, 0, SEEK_END);
+  size_t pos = ftello(segyf->fp); /* pos is the filesize in bytes */
+  fseeko(segyf->fp, original_pos, SEEK_SET);
+  return (pos - SEGY_EBCBYTES - SEGY_BHNBYTES) / segyf->nsegy;
 }
 
 /** read one trace from segy 
@@ -1046,11 +1096,11 @@ size_t segycal_ntrance(SEGY_FILE segyf) {
 * @param thead: integer array to store trace header, must be at least SEGY_THNKEYS
 * @param trace: float array to store trace data, must be at least ns elements
 */
-int segyread_onetrace(SEGY_FILE segyf, int* thead, float* trace) {
-  if (1 != fread(segyf.tracebuf, segyf.nsegy, 1, segyf.fp))
-    errorinfo("Error reading trace header");
-  segy2head(segyf.tracebuf, thead,SEGY_THNKEYS);
-  segy2trace(segyf.tracebuf + SEGY_THNBYTES, trace, segyf.ns, segyf.format);
+int segyread_onetrace(segyfile segyf, int* thead, float* trace) {
+  if (1 != fread(segyf->tracebuf, segyf->nsegy, 1, segyf->fp))
+    return 0; /* End of file or error */
+  segy2head(segyf->tracebuf, thead, SEGY_THNKEYS);
+  segy2trace(segyf->tracebuf + SEGY_THNBYTES, trace, segyf->ns, segyf->format);
   return 1;
 }
 
@@ -1059,11 +1109,11 @@ int segyread_onetrace(SEGY_FILE segyf, int* thead, float* trace) {
 * @param thead: integer array to store trace header, must be at least SEGY_THNKEYS
 * @param trace: float array to store trace data, must be at least ns elements
 */
-int segywrite_onetrace(SEGY_FILE segyf, const int* thead, const float* trace) {
-  head2segy(segyf.tracebuf, thead, SEGY_THNKEYS);
-  trace2segy(segyf.tracebuf + SEGY_THNBYTES, trace, segyf.ns, segyf.format);
-  if (1 != fwrite(segyf.tracebuf, segyf.nsegy, 1, segyf.fp))
-    errorinfo("Error writing trace header");
+int segywrite_onetrace(segyfile segyf, const int* thead, const float* trace) {
+  head2segy(segyf->tracebuf, thead, SEGY_THNKEYS);
+  trace2segy(segyf->tracebuf + SEGY_THNBYTES, trace, segyf->ns, segyf->format);
+  if (1 != fwrite(segyf->tracebuf, segyf->nsegy, 1, segyf->fp))
+    errorinfo("Error writing trace");
   return 1;
 }
 
@@ -1072,9 +1122,14 @@ int segywrite_onetrace(SEGY_FILE segyf, const int* thead, const float* trace) {
 * @param value: pointer to store the converted value
 * @param off: offset in chars to start reading from (start from 0)
 * @param type: type of value to convert to, /(i)nt/(l)ong/(f)loat/(d)ouble/(s)hort
+
+example: write cdpx,sx from segy header 
+int gx,sx;
+value2char(segy->tracebuf, &cdpx, 180,"i"); // cdpx is at offset 180 in trace head (240bytes) 
+value2char(segy->tracebuf, &sx, 72,"i"); // gx is at offset 180 in tracebuf (240bytes)
 */
-void char2value(const char* chars, void* value, size_t off, const char type) {
-  switch (type) {
+void char2value(const char* chars, void* value, size_t off, const char* type) {
+  switch (type[0]) {
     case 'i': /* int */
       *(int*)value = convert4(chars + off);
       break;
@@ -1090,6 +1145,9 @@ void char2value(const char* chars, void* value, size_t off, const char type) {
     case 's': /* short */
       *(short*)value = convert2(chars + off);
       break;
+      case 'c': /* char/byte/int8 */
+      *(char*)value = *(chars + off);
+        break;
     default:
       errorinfo("Unknown type %c", type);
   }
@@ -1100,9 +1158,15 @@ void char2value(const char* chars, void* value, size_t off, const char type) {
 * @param value: pointer to store the converted value
 * @param off: offset in chars to start reading from (start from 0)
 * @param type: type of value to convert to, /(i)nt/(l)ong/(f)loat/(d)ouble/(s)hort
+
+example :
+// write cdpx,sx from segy header 
+int gx,sx;
+value2char(segy->tracebuf, &cdpx, 180,"i"); // cdpx is at offset 180 in trace head (240bytes) 
+value2char(segy->tracebuf, &sx, 72,"i"); // gx is at offset 180 in tracebuf (240bytes)
 */
-void value2char(char* chars, void* value, size_t off, const char type) {
-  switch (type) {
+void value2char(char* chars, void* value, size_t off, const char* type) {
+  switch (type[0]) {
     case 'i': /* int */
       insert4(*(int*)value, chars + off);
       break;
@@ -1118,6 +1182,9 @@ void value2char(char* chars, void* value, size_t off, const char type) {
     case 's': /* short */
       insert2(*(short*)value, chars + off);
       break;
+    case 'c': /* char/byte/int8 */
+        *(chars + off) = *(char*)value;
+        break;
     default:
       errorinfo("Unknown type %c", type);
   }

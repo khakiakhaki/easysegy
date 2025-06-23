@@ -31,17 +31,19 @@ typedef struct {
 
 typedef SEGY_FILE* segyfile;
 
-/*<eroor info > */
+/*<eroor info  */
 void errorinfo(const char* format, ...);
+/*< warning info */
+void warninginfo(const char* format, ...) ;
 
 /*< initialize segyfile in read mode  >*/
-SEGY_FILE segyfile_init_read(const FILE* fp);
+segyfile segyfile_init_read(FILE* fp);
 
 /*< initialize segyfile in read mode  >*/
-SEGY_FILE segyfile_init_write(const FILE* fp, int ns, float dt, int format,size_t ntrace);
+segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,size_t ntrace);
 
 /*< free the segyfile */
-void segyfile_free(SEGY_FILE segyf);
+void segyfile_free(segyfile segyf);
 
 /*< Convert char array arrr[narr]: EBC to ASCII >*/
 void ebc2asc(int narr, char* arr);
@@ -90,45 +92,45 @@ void segy2trace(const char* buf, float* trace, int ns, int format);
 void trace2segy(char* buf, const float* trace, int ns, int format);
 
 /*< Convert an integer trace[nk] to buffer buf >*/
-void head2segy(const char* theadchar, const int* thead, int nk);
+void head2segy(char* theadchar, const int* thead, int nk);
 
 /*< convert raw segy traceheader to native int array */
-void segy2head(const char* theadchar, int* thead, int nk);
+void segy2head(char* theadchar, int* thead, int nk);
 
 /*< Create a binary header for SEGY >*/
-void bhead2segy(const char* bheadchar, const int* bhead, int nk);
+void bhead2segy(char* bheadchar, const int* bhead, int nk);
 
 /** convert raw trace segy to native int array */
-void segy2bhead(const char* bheadchar, int* bhead, int nk);
+void segy2bhead(char* bheadchar, int* bhead, int nk);
 
 /*< writhe 3200 header*/
-int segywrite_texthead(SEGY_FILE segyfile, int isskip, int useebc);
+int segywrite_texthead(segyfile segyf, int isskip, int useebc);
 
 /*< read the segy text header to file 3200 bytes */
-int segyread_texthead(SEGY_FILE segyfile, int isskip, int useebc);
+int segyread_texthead(segyfile segyf, int isskip, int useebc);
 
 /*< write the bheader segy */
-int segywrite_binaryhead(SEGY_FILE segyfile);
+int segywrite_binaryhead(segyfile segyf);
 
 /*< read the bheader segy */
-int segyread_binaryhead(SEGY_FILE segyfile);
+int segyread_binaryhead(segyfile segyf);
 
 /*< set the segy bytes of trace with header */
-size_t segycal_nsegy(SEGY_FILE segyfile);
+size_t segycal_nsegy(segyfile segyf);
 
 /*< get trace number */
-size_t segycal_ntrace(SEGY_FILE segyfile);
+size_t segycal_ntrace(segyfile segyf);
 
 /*< read one trace from segy */
-int segyread_onetrace(SEGY_FILE segyf, int* thead, float* trace);
+int segyread_onetrace(segyfile segyf, int* thead, float* trace);
 
 /*< write one trace from segy */
-int segywrite_onetrace(SEGY_FILE segyf, const int* thead, const float* trace);
+int segywrite_onetrace(segyfile segyf, const int* thead, const float* trace);
 
 /*< convert char to value */
-void char2value(const char* chars, void* value, size_t off, const char type);
+void char2value(const char* chars, void* value, size_t off, const char* type);
 
 /*< convert value to char */
-void value2char(char* chars, void* value, size_t off, const char type);
+void value2char(char* chars, void* value, size_t off, const char* type);
 
 #endif
