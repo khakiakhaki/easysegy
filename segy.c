@@ -18,15 +18,19 @@
   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
+#include <math.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// #include <rsf.h>
+#ifdef HAVE_SYS_STAT_H
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif  //HAVE_SYS_STAT_H
 
 #include "segy.h"
-
 #ifndef _segy_h
 
 enum {
@@ -55,12 +59,44 @@ typedef struct {
 
 #endif
 
+#define IEEEMAX 0x7FFFFFFF
+#define IEMAXIB 0x611FFFFF
+#define IEMINIB 0x21200000
+
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define HOST_LITTLE_ENDIAN 1
+#else
+#define HOST_LITTLE_ENDIAN 0
+#endif
+
+// Check for compiler intrinsics for byte swapping
+#if defined(__GNUC__) || defined(__clang__)
+#define bswap16(x) __builtin_bswap16(x)
+#define bswap32(x) __builtin_bswap32(x)
+#define bswap64(x) __builtin_bswap64(x)
+#elif defined(_MSC_VER)
+#include <stdlib.h>
+#define bswap16(x) _byteswap_ushort(x)
+#define bswap32(x) _byteswap_ulong(x)
+#define bswap64(x) _byteswap_uint64(x)
+#else
+// Fallback for other compilers
+static inline uint16_t bswap16(uint16_t x) {
+  return (x >> 8) | (x << 8);
+}
+static inline uint32_t bswap32(uint32_t x) {
+  return (x >> 24) | ((x << 8) & 0x00FF0000) | ((x >> 8) & 0x0000FF00) |
+         (x << 24);
+}
+static inline uint64_t bswap64(uint64_t x) {
+  x = (x & 0x00000000FFFFFFFF) << 32 | (x & 0xFFFFFFFF00000000) >> 32;
+  x = (x & 0x0000FFFF0000FFFF) << 16 | (x & 0xFFFF0000FFFF0000) >> 16;
+  x = (x & 0x00FF00FF00FF00FF) << 8 | (x & 0xFF00FF00FF00FF00) >> 8;
+  return x;
+}
+#endif
+
 typedef unsigned char byte;
-
-/* it will automatic run before main function */
-static int little_endian = -1;
-
-static void checkendian(void) __attribute__((constructor));
 
 static byte EBCtoASC[256] = {
     0x00, 0x01, 0x02, 0x03, 0xCF, 0x09, 0xD3, 0x7F, 0xD4, 0xD5, 0xC3, 0x0B,
@@ -350,21 +386,21 @@ static const segy standard_segy_key[] = {
 };
 
 /* Big-endian to Little-endian conversion and back */
-static int convert2(const char* buf);
-static int convert4(const char* buf);
-static long convert8(const char* buf);
-static float fconvert4(const char* buf);
-static double fconvert8(const char* buf);
-static void insert2(int y, char* buf);
-static void insert4(int y, char* buf);
-static void insert8(long y, char* buf);
-static void finsert4(float y, char* buf);
-static void finsert8(double y, char* buf);
-static void swapb(byte* x, byte* y);
+static inline uint16_t get16(const char* buf);
+static inline uint32_t get32(const char* buf);
+static inline uint64_t get64(const char* buf);
+static inline float get32f(const char* buf);
+static inline double get64f(const char* buf);
+
+static inline void put16(char* buf, uint16_t val);
+static inline void put32(char* buf, uint32_t val);
+static inline void put64(char* buf, uint64_t val);
+// static inline void put32f(char* buf,float val);
+// static inline void put64f(char* buf,double val);
 
 /* IBM to IEEE float conversion and back */
-static float ibm2float(const char* num);
-static void float2ibm(float y, char* num);
+static float ibm2ieee(const char* num);
+static void ieee2ibm(char* num, float y);
 
 /* alloc segyfiel */
 static void segyinit_alloc(segyfile segyf);
@@ -387,14 +423,15 @@ segyfile segyfile_init_read(FILE* fp) {
   segyf->nsegy = segycal_nsegy(segyf);
   segyf->ntrace = segycal_ntrace(segyf);
   segyf->tracebuf = (char*)malloc(segyf->nsegy);
-  if (!segyf->tracebuf) errorinfo("malloc failed for tracebuf");
+  if (!segyf->tracebuf)
+    errorinfo("malloc failed for tracebuf");
   memset(segyf->tracebuf, 0, segyf->nsegy);
   return segyf;
 }
 
 /* segyfile write init , no write set, should write manual for more flexible write */
 segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,
-                              size_t ntrace) {
+                             size_t ntrace) {
   segyfile segyf = (segyfile)malloc(sizeof(SEGY_FILE));
   segyinit_alloc(segyf);
   segyf->fp = fp;
@@ -408,21 +445,26 @@ segyfile segyfile_init_write(FILE* fp, int ns, float dt, int format,
   segyf->ntrace = ntrace;
   segyf->nsegy = segycal_nsegy(segyf);
   segyf->tracebuf = (char*)malloc(segyf->nsegy);
-  if (!segyf->tracebuf) errorinfo("malloc failed for tracebuf");
+  if (!segyf->tracebuf)
+    errorinfo("malloc failed for tracebuf");
   memset(segyf->tracebuf, 0, segyf->nsegy);
   return segyf;
 }
 
 static void segyinit_alloc(segyfile segyf) {
-  if (!segyf) errorinfo("malloc failed for SEGY_FILE");
+  if (!segyf)
+    errorinfo("malloc failed for SEGY_FILE");
   segyf->textraw = (char*)malloc(SEGY_EBCBYTES);
-  if (!segyf->textraw) errorinfo("malloc failed for segy textraw");
+  if (!segyf->textraw)
+    errorinfo("malloc failed for segy textraw");
   memset(segyf->textraw, 0, SEGY_EBCBYTES);
   segyf->bhraw = (char*)malloc(SEGY_BHNBYTES);
-  if (!segyf->bhraw) errorinfo("malloc failed for segy bhraw");
+  if (!segyf->bhraw)
+    errorinfo("malloc failed for segy bhraw");
   memset(segyf->bhraw, 0, SEGY_BHNBYTES);
   segyf->bhead = (int*)malloc(sizeof(int) * SEGY_BHNKEYS);
-  if (!segyf->bhead) errorinfo("malloc failed for segy bhead");
+  if (!segyf->bhead)
+    errorinfo("malloc failed for segy bhead");
   memset(segyf->bhead, 0, sizeof(int) * SEGY_BHNKEYS);
 }
 
@@ -437,205 +479,109 @@ void segyfile_free(segyfile segyf) {
   }
 }
 
-/*< Set endianness, if true means machine is little endian >*/
-static void checkendian(void) {
-  union {
-    short i;
-    unsigned char c[sizeof(short)];
-  } test;
-  test.i = 1;
-  // is little endiam low char in low location of mem ,
-  little_endian = (int)(test.c[0] == 1);
-  // is big  endian
-  // big_endian = (int)(test.c[0] == 0);
+// Get a 2-byte integer from a big-endian buffer
+static inline uint16_t get16(const char* buf) {
+  uint16_t x;
+  memcpy(&x, buf, 2);
+#ifdef HOST_LITTLE_ENDIAN
+  x = bswap16(x);
+#endif
+  return x;
 }
 
-static void swapb(byte* x, byte* y)
-/* swap two bytes */
-{
-  byte tmp;
-
-  tmp = *x;
-  *x = *y;
-  *y = tmp;
+// Get a 4-byte integer from a big-endian buffer
+static inline uint32_t get32(const char* buf) {
+  uint32_t x;
+  memcpy(&x, buf, 4);
+#ifdef HOST_LITTLE_ENDIAN
+  x = bswap32(x);
+#endif
+  return x;
 }
 
-static int convert2(const char* buf)
-/* convert buf to 2-byte int */
-{
+// Get a 8-byte integer from a big-endian buffer
+static inline uint64_t get64(const char* buf) {
+  uint64_t x;
+  memcpy(&x, buf, 8);
+#ifdef HOST_LITTLE_ENDIAN
+  x = bswap64(x);
+#endif
+  return x;
+}
+
+// Get a 4-byte float from a big-endian buffer
+static inline float get32f(const char* buf) {
   union {
-    byte b[2];
-    short s;
+    uint32_t u;
+    float f;
   } x;
-
-  memcpy(x.b, buf, 2);
-
-  if (little_endian)
-    swapb(x.b, x.b + 1);
-
-  return (int)x.s;
+  memcpy(&x.u, buf, 4);
+#ifdef HOST_LITTLE_ENDIAN
+  x.u = bswap32(x.u);
+#endif
+  return x.f;
 }
 
-static int convert4(const char* buf)
-/* convert buf to 4-byte int */
-{
+// Get a 8-byte float from a big-endian buffer
+static inline double get64f(const char* buf) {
   union {
-    byte b[4];
-    int s;
+    uint64_t u;
+    double d;
   } x;
-
-  memcpy(x.b, buf, 4);
-
-  if (little_endian) {
-    swapb(x.b, x.b + 3);
-    swapb(x.b + 1, x.b + 2);
-  }
-
-  return x.s;
+  memcpy(&x.u, buf, 8);
+#ifdef HOST_LITTLE_ENDIAN
+  x.u = bswap64(x.u);
+#endif
+  return x.d;
 }
 
-static long convert8(const char* buf)
-/* convert buf to 4-byte int long*/
-{
-  union {
-    byte b[8];
-    long s;
-  } x;
-
-  memcpy(x.b, buf, 8);
-
-  if (little_endian) {
-    swapb(x.b, x.b + 7);
-    swapb(x.b + 1, x.b + 6);
-    swapb(x.b + 2, x.b + 5);
-    swapb(x.b + 3, x.b + 4);
-  }
-
-  return x.s;
+// Put a 2-byte integer into a big-endian buffer
+static inline void put16(char* buf, uint16_t val) {
+#ifdef HOST_LITTLE_ENDIAN
+  val = bswap16(val);
+#endif
+  memcpy(buf, &val, 2);
 }
 
-static float fconvert4(const char* buf)
-/* convert buf to 4-byte float */
-{
-  union {
-    byte b[4];
-    float s;
-  } x;
-
-  memcpy(x.b, buf, 4);
-
-  if (little_endian) {
-    swapb(x.b, x.b + 3);
-    swapb(x.b + 1, x.b + 2);
-  }
-
-  return x.s;
+// Put a 4-byte integer/float into a big-endian buffer
+static inline void put32(char* buf, uint32_t val) {
+#ifdef HOST_LITTLE_ENDIAN
+  val = bswap32(val);
+#endif
+  memcpy(buf, &val, 4);
 }
 
-static double fconvert8(const char* buf)
-/* convert buf to 4-byte float */
-{
-  union {
-    byte b[8];
-    double s;
-  } x;
-
-  memcpy(x.b, buf, 8);
-
-  if (little_endian) {
-    swapb(x.b, x.b + 7);
-    swapb(x.b + 1, x.b + 6);
-    swapb(x.b + 2, x.b + 5);
-    swapb(x.b + 3, x.b + 4);
-  }
-
-  return x.s;
+// put a 8-byte integerinto a big-endian buffer
+static inline void put64(char* buf, uint64_t val) {
+#ifdef HOST_LITTLE_ENDIAN
+  val = bswap64(val);
+#endif
+  memcpy(buf, &val, 8);
 }
 
-static void insert2(int y, char* buf)
-/* convert 2-byte int to buf */
-{
+// Get a 8-byte integer from a big-endian buffer
+static inline void put32f(char* buf, float val) {
   union {
-    byte b[2];
-    short s;
+    uint32_t u;
+    float f;
   } x;
-
-  x.s = (short)y;
-
-  if (little_endian)
-    swapb(x.b, x.b + 1);
-
-  memcpy(buf, x.b, 2);
+  x.f = val;
+#ifdef HOST_LITTLE_ENDIAN
+  x.u = bswap32(x.u);
+#endif
+  memcpy(buf, &x.u, 4);
 }
 
-static void insert4(int y, char* buf)
-/* convert 4-byte int to buf */
-{
+static inline void put64f(char* buf, double val) {
   union {
-    byte b[4];
-    int s;
+    uint64_t u;
+    double d;
   } x;
-
-  x.s = y;
-
-  if (little_endian) {
-    swapb(x.b, x.b + 3);
-    swapb(x.b + 1, x.b + 2);
-  }
-
-  memcpy(buf, x.b, 4);
-}
-
-static void finsert4(float y, char* buf)
-/* convert 4-byte float to buf */
-{
-  union {
-    byte b[4];
-    float s;
-  } x;
-
-  x.s = y;
-
-  if (little_endian) {
-    swapb(x.b, x.b + 3);
-    swapb(x.b + 1, x.b + 2);
-  }
-
-  memcpy(buf, x.b, 4);
-}
-
-static void insert8(long y, char* buf)
-/* convert 8-byte long to buf */
-{
-  union {
-    byte b[8];
-    long s;
-  } x;
-  x.s = y;
-  if (little_endian) {
-    swapb(x.b, x.b + 7);
-    swapb(x.b + 1, x.b + 6);
-    swapb(x.b + 2, x.b + 5);
-    swapb(x.b + 3, x.b + 4);
-  }
-  memcpy(buf, x.b, 8);
-}
-
-static void finsert8(double y, char* buf)
-/* convert 8-byte long to buf */
-{
-  union {
-    byte b[8];
-    double s;
-  } x;
-  x.s = y;
-  if (little_endian) {
-    swapb(x.b, x.b + 7);
-    swapb(x.b + 1, x.b + 6);
-    swapb(x.b + 2, x.b + 5);
-    swapb(x.b + 3, x.b + 4);
-  }
-  memcpy(buf, x.b, 8);
+  x.d = val;
+#ifdef HOST_LITTLE_ENDIAN
+  x.u = bswap64(x.u);
+#endif
+  memcpy(buf, &x.u, 8);
 }
 
 void ebc2asc(int narr, char* arr)
@@ -662,48 +608,33 @@ void asc2ebc(int narr, char* arr)
   }
 }
 
-int segyformat(const char* bheadraw)
-/*< extracts SEGY format from binary header >*/
-{
-  return convert2(bheadraw + SEGY_BH_FORMAT);
+int segyformat(const char* bhead) {
+  return (int)get16(bhead + SEGY_BH_FORMAT);
 }
 
-void set_segyformat(char* bheadraw, int format)
-/*< set SEGY format in binary header >*/
-{
-  insert2(format, bheadraw + SEGY_BH_FORMAT);
+void set_segyformat(char* bhead, int format) {
+  put16(bhead + SEGY_BH_FORMAT, (uint16_t)format);
 }
 
-int segyns(const char* bheadraw)
-/*< extracts ns (number of samples) from binary header >*/
-{
-  return convert2(bheadraw + SEGY_BH_NS);
+int segyns(const char* bhead) {
+  return (int)get16(bhead + SEGY_BH_NS);
 }
 
-void set_segyns(char* bheadraw, int ns)
-/*< set ns (number of samples) in binary header >*/
-{
-  insert2(ns, bheadraw + SEGY_BH_NS);
+void set_segyns(char* bhead, int ns) {
+  put16(bhead + SEGY_BH_NS, (uint16_t)ns);
 }
 
-float segydt(const char* bheadraw)
-/*< extracts dt (sampling) from binary header >*/
-{
-  return (float)(convert2(bheadraw + SEGY_BH_DT) / 1000000.);
+float segydt(const char* bhead) {
+  float dt_micro = (float)(get16(bhead + SEGY_BH_DT));
+  return dt_micro / 1000000.0f;
 }
 
-void set_segydt(char* bheadraw, float dt)
-/*< set dt (sampling) in binary header >*/
-{
-  float scale;
-
-  /* input in seconds or miliseconds? */
-  scale = (dt < 1.0) ? 1000000. : 1000.;
-
-  insert2((int)(scale * dt), bheadraw + SEGY_BH_DT);
+void set_segydt(char* bhead, float dt) {
+  int16_t dt_micro = (int)(dt * 1000000.0f + 0.5f);
+  put16(bhead + SEGY_BH_DT, (int16_t)dt_micro);
 }
 
-static void float2ibm(float y, char* num)
+static void ieee2ibm(char* num, float y)
 /* floating-point conversion to IBM format */
 {
   unsigned int x, s, f;
@@ -714,7 +645,7 @@ static void float2ibm(float y, char* num)
 
   /* check for special case of zero */
   if ((x & 0x7fffffff) == 0) {
-    insert4(x, num);
+    put32(num, x);
     return;
   }
 
@@ -751,10 +682,10 @@ static void float2ibm(float y, char* num)
     s |= (e << 24) | f;
   }
 
-  insert4(s, num);
+  put32(num, s);
 }
 
-static float ibm2float(const char* num)
+static float ibm2ieee(const char* num)
 /* floating point conversion from IBM format */
 {
   unsigned int x, s, f;
@@ -762,7 +693,7 @@ static float ibm2float(const char* num)
   int e;
   float y;
 
-  x = convert4(num);
+  x = get32(num);
 
   /* check for special case of zero */
   if ((x & 0x7fffffff) == 0)
@@ -848,19 +779,19 @@ void segy2trace(const char* buf, float* trace, int ns, int format) {
   for (i = 0; i < ns; i++, buf += nb) {
     switch (format) {
       case 1:
-        trace[i] = ibm2float(buf);
+        trace[i] = ibm2ieee(buf);
         break; /* IBM float */
       case 2:
-        trace[i] = (float)convert4(buf);
+        trace[i] = (float)get32(buf);
         break; /* int4 */
       case 3:
-        trace[i] = (float)convert2(buf);
+        trace[i] = (float)get16(buf);
         break; /* int2 */
       case 5:
-        trace[i] = fconvert4(buf);
+        trace[i] = get32f(buf);
         break; /* IEEE float */
       default:
-        errorinfo("Unknown format %d", format);
+        errorinfo("not support format %d", format);
         break;
     }
   }
@@ -869,24 +800,24 @@ void segy2trace(const char* buf, float* trace, int ns, int format) {
 /*< Convert a floating-point trace[ns] to buffer buf.
 -- format: 1: IBM, 2: int4, 3: int2, 5: IEEE
 */
-void trace2segy(char* buf, const float* trace, int ns, int format) {
+void trace2segy(char* tracebuf, const float* trace, int ns, int format) {
   int i, nb;
 
   nb = (3 == format) ? 2 : 4;
 
-  for (i = 0; i < ns; i++, buf += nb) {
+  for (i = 0; i < ns; i++, tracebuf += nb) {
     switch (format) {
       case 1:
-        float2ibm(trace[i], buf);
+        ieee2ibm(tracebuf, trace[i]);
         break; /* IBM float */
       case 2:
-        insert4((int)trace[i], buf);
+        put32(tracebuf, (int)trace[i]);
         break; /* int4 */
       case 3:
-        insert2((int)trace[i], buf);
+        put16(tracebuf, (int)trace[i]);
         break; /* int2 */
       case 5:
-        finsert4((float)trace[i], buf);
+        put32f(tracebuf, (float)trace[i]);
         break; /* IEEE float */
       default:
         errorinfo("Unknown format %d", format);
@@ -896,16 +827,20 @@ void trace2segy(char* buf, const float* trace, int ns, int format) {
 }
 
 /*< Convert an integer trace[nk] to buffer buf */
-void head2segy(char* theadchar, const int* trace, int nk) {
-  char* buf = theadchar;
+void head2segy(char* tracebuf, const int* thead, int nk) {
+  char* buf = tracebuf;
   if (nk > SEGY_THNKEYS)
     nk = SEGY_THNKEYS;
   for (int i = 0; i < nk; i++) {
+    if (thead[i] == 0) {
+      buf += standard_segy_key[i].size;
+      continue;
+    }
     if (2 == standard_segy_key[i].size) {
-      insert2(trace[i], buf);
+      put16(buf, thead[i]);
       buf += 2;
     } else {
-      insert4(trace[i], buf);
+      put32(buf, thead[i]);
       buf += 4;
     }
   }
@@ -915,16 +850,16 @@ void head2segy(char* theadchar, const int* trace, int nk) {
 * @param theadchar: raw segy buffer, must be at least SEGY_THNBYTES bytes
 * @param thead: integer array to store trace header, must be at least SEGY
 */
-void segy2head(char* theadchar, int* thead, int nk) {
-  char* p = theadchar;
+void segy2head(char* tracebuf, int* thead, int nk) {
+  char* p = tracebuf;
   if (nk > SEGY_THNKEYS)
     nk = SEGY_THNKEYS;
   for (int i = 0; i < nk; i++) {
     if (i < SEGY_THNKEYS && 2 == standard_segy_key[i].size) {
-      thead[i] = convert2(p);
+      thead[i] = (short)get16(p);
       p += 2;
     } else {
-      thead[i] = convert4(p);
+      thead[i] = get32(p);
       p += 4;
     }
   }
@@ -937,10 +872,10 @@ void bhead2segy(char* bheadchar, const int* bhead, int nk) {
     nk = SEGY_BHNKEYS;
   for (int i = 0; i < nk; i++) {
     if (i < SEGY_BHNKEYS && 2 == bheadkey[i].size) {
-      insert2(bhead[i], buf);
+      put16(buf, (int)bhead[i]);
       buf += 2;
     } else {
-      insert4(bhead[i], buf);
+      put32(buf, bhead[i]);
       buf += 4;
     }
   }
@@ -950,16 +885,16 @@ void bhead2segy(char* bheadchar, const int* bhead, int nk) {
 * @param bheadchar: raw segy buffer, must be at least SEGY_THNBYTES bytes
 * @param bhead: integer array to store trace header, must be at least SEGY
 */
-void segy2bhead(char* bheadchar,int* bhead, int nk) {
+void segy2bhead(char* bheadchar, int* bhead, int nk) {
   char* buf = bheadchar;
   if (nk > SEGY_BHNKEYS)
     nk = SEGY_BHNKEYS;
   for (int i = 0; i < SEGY_BHNKEYS; i++) {
     if (i < SEGY_BHNKEYS && 2 == bheadkey[i].size) {
-      bhead[i] = convert2(buf);
+      bhead[i] = (short)get16(buf);
       buf += 2;
     } else {
-      bhead[i] = convert4(buf);
+      bhead[i] = get32(buf);
       buf += 4;
     }
   }
@@ -985,7 +920,6 @@ void errorinfo(const char* format, ...) {
   exit(EXIT_FAILURE);
 }
 
-
 /*< print warning info and exit program */
 void warninginfo(const char* format, ...) {
   va_list args;
@@ -1004,7 +938,6 @@ void warninginfo(const char* format, ...) {
   fprintf(stderr, "\n");
   (void)fflush(stderr);
 }
-
 
 /*
 wirte the segy text header to file , all 3200 bytes
@@ -1042,7 +975,6 @@ int segyread_texthead(segyfile segyf, int isskip, int useebc) {
     return 3200;
   }
 
-
   if (SEGY_EBCBYTES != fread(segyf->textraw, 1, SEGY_EBCBYTES, segyf->fp))
     errorinfo("Error reading ebcdic header");
 
@@ -1060,7 +992,7 @@ int segyread_texthead(segyfile segyf, int isskip, int useebc) {
 int segywrite_binaryhead(segyfile segyf) {
   bhead2segy(segyf->bhraw, segyf->bhead, SEGY_BHNKEYS);
   if (segydt(segyf->bhraw) == 0. || segyf->bhead[segybhkey("hdt")] == 0)
-  warninginfo("binary header dt not set");  
+    warninginfo("binary header dt not set");
   if (segyns(segyf->bhraw) == 0 || segyf->bhead[segybhkey("hns")] == 0)
     warninginfo("binary header ns not set");
   if (segyformat(segyf->bhraw) == 0 || segyf->bhead[segybhkey("format")] == 0)
@@ -1130,23 +1062,23 @@ value2char(segy->tracebuf, &sx, 72,"i"); // gx is at offset 180 in tracebuf (240
 void char2value(const char* chars, void* value, size_t off, const char* type) {
   switch (type[0]) {
     case 'i': /* int */
-      *(int*)value = convert4(chars + off);
+      *(int*)value = get32(chars + off);
       break;
     case 'l': /* long int */
-      *(int*)value = convert8(chars + off);
+      *(long*)value = get64f(chars + off);
       break;
     case 'f': /* float */
-      *(float*)value = fconvert4(chars + off);
+      *(float*)value = get32f(chars + off);
       break;
     case 'd': /* double */
-      *(double*)value = fconvert8(chars + off);
+      *(double*)value = get64f(chars + off);
       break;
     case 's': /* short */
-      *(short*)value = convert2(chars + off);
+      *(short*)value = (short)get16(chars + off);
       break;
-      case 'c': /* char/byte/int8 */
+    case 'c': /* char/byte/int8 */
       *(char*)value = *(chars + off);
-        break;
+      break;
     default:
       errorinfo("Unknown type %c", type);
   }
@@ -1167,24 +1099,24 @@ value2char(segy->tracebuf, &sx, 72,"i"); // gx is at offset 180 in tracebuf (240
 void value2char(char* chars, void* value, size_t off, const char* type) {
   switch (type[0]) {
     case 'i': /* int */
-      insert4(*(int*)value, chars + off);
+      put32(chars + off, *(uint32_t*)value);
       break;
     case 'l': /* long int */
-      insert8(*(long*)value, chars + off);
+      put64(chars + off, *(uint64_t*)value);
       break;
     case 'f': /* float */
-      finsert4(*(float*)value, chars + off);
+      put32f(chars + off, *(float*)value);
       break;
     case 'd': /* double */
-      finsert8(*(double*)value, chars + off);
+      put64f(chars + off, *(double*)value);
       break;
     case 's': /* short */
-      insert2(*(short*)value, chars + off);
+      put16(chars + off, *(uint16_t*)value);
       break;
     case 'c': /* char/byte/int8 */
-        *(chars + off) = *(char*)value;
-        break;
+      *(chars + off) = *(char*)value;
+      break;
     default:
-      errorinfo("Unknown type %c", type);
+      errorinfo("Unknown type %c", type[0]);
   }
 }

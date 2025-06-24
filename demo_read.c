@@ -39,6 +39,13 @@ int main() {
   char2value(segyin->bhraw, &value, 302, "s");  // set 302
   printf("binary header value at 302: %d\n", value);
 
+  for(int i = 0; i < SEGY_BHNKEYS; i++) {
+    if (segyin->bhead[i] == 0) {
+      continue;  // skip if not set
+    }
+    printf("the %dth binary header key %s: %d\n",i, segybhkeyword(i), segyin->bhead[i]);
+  }
+
   for (size_t itrace = 0; itrace < segyin->ntrace; itrace++) {
     // read one trace data
     segyread_onetrace(segyin, thead, data);

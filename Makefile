@@ -1,4 +1,4 @@
-OPT = -O2
+OPT = -g
 CFLAG = -Wall -Wextra 
 LIBS = -L. -lesegy -lm
 
@@ -17,7 +17,7 @@ demo_read:demo_read.c
 	$(CC) $(OPT) $(CFLAG) $< $(LIBS) -o $@
 
 clean:
-	@rm libesegy.a demo_write demo_read
+	@rm libesegy.a demo_write demo_read *.segy *.bin demo
 
 release:
-	tar -czf release.tar.gz *.c *.h Makefile
+	tar -czf libsegy.tar.gz *.c *.h Makefile
